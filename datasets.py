@@ -1,7 +1,8 @@
 import os
 import json
-from torch.utils.data import DataLoader, random_split, Subset
+from torch.utils.data import DataLoader, random_split, Subset, Dataset
 import torch
+import numpy as np
 
 from torchvision import datasets, transforms
 from torchvision.datasets.folder import ImageFolder, default_loader
@@ -10,7 +11,6 @@ from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from timm.data import create_transform
 import medmnist
 from medmnist import INFO, Evaluator
-
 
 import requests
 from zipfile import ZipFile
@@ -31,7 +31,267 @@ import shutil
 root_dir='data'
 if not os.path.exists(root_dir):
             os.makedirs(root_dir)
+
+
+def get_label_groups(dataset_name):
+    """
+    Define label grouping strategy for each dataset
+    
+    Args:
+        dataset_name (str): Dataset name
+    
+    Returns:
+        list: Group list in format [[group0_labels], [group1_labels], [group2_labels], ...]
+              Returns None if the dataset does not support grouping
+    
+    Example:
+        >>> get_label_groups('chestmnist')
+        [[3, 2, 0], [5, 4, 7, 8, 12, 1, 10, 9], [11, 6], [13]]
+    """
+    groups = {
+        'chestmnist': [
+            [3, 2, 0],                          # Group 0: 3 classes (high frequency)
+            [5, 4, 7, 8, 12, 1, 10, 9],        # Group 1: 8 classes (medium frequency)
+            [11, 6],                            # Group 2: 2 classes (low frequency)
+            [13]                                # Group 3: 1 class (very low frequency)
+        ],
+        # Add group definitions for other datasets here
+        # 'pathmnist': [...],
+        # 'dermamnist': [...],
+    }
+    return groups.get(dataset_name, None)
+
+
+def get_sorted_label_order(dataset_name):
+    """
+    Get the sorted label order for a dataset (by frequency, descending)
+    
+    Args:
+        dataset_name (str): Dataset name
+        
+    Returns:
+        list: Sorted list of label indices
+        
+    Example:
+        >>> get_sorted_label_order('chestmnist')
+        [3, 2, 0, 5, 4, 7, 8, 12, 1, 10, 9, 11, 6, 13]
+    """
+    # ChestMNIST sorted by frequency (from DP algorithm)
+    if dataset_name == 'chestmnist':
+        return [3, 2, 0, 5, 4, 7, 8, 12, 1, 10, 9, 11, 6, 13]
+    
+    return None
+
+
+def get_label_range(dataset_name, head_class, tail_class):
+    """
+    Get labels within a specified range based on sorted order
+    
+    Args:
+        dataset_name (str): Dataset name
+        head_class (int): Starting class (inclusive)
+        tail_class (int): Ending class (inclusive)
+        
+    Returns:
+        list: List of class labels in the range
+        
+    Example:
+        >>> get_label_range('chestmnist', 2, 10)
+        [2, 0, 5, 4, 7, 8, 12, 1, 10]
+        >>> get_label_range('chestmnist', 3, 5)
+        [3, 2, 0, 5]
+    """
+    sorted_order = get_sorted_label_order(dataset_name)
+    
+    if sorted_order is None:
+        raise ValueError(f"No sorted order defined for dataset {dataset_name}")
+    
+    # Find indices of head and tail in sorted order
+    try:
+        head_idx = sorted_order.index(head_class)
+        tail_idx = sorted_order.index(tail_class)
+    except ValueError as e:
+        raise ValueError(f"Class not found in sorted order: {e}")
+    
+    # Ensure head comes before tail
+    if head_idx > tail_idx:
+        raise ValueError(f"head_class ({head_class}) must come before tail_class ({tail_class}) in sorted order")
+    
+    # Extract range (inclusive)
+    label_range = sorted_order[head_idx:tail_idx + 1]
+    
+    return label_range
+
+
+class SampledDataset(Dataset):
+    """
+    Wraps a dataset to use only a fraction of samples
+    
+    Args:
+        base_dataset: Original dataset
+        sample_ratio: Fraction of data to use (0 < sample_ratio <= 1.0)
+        seed: Random seed for reproducibility (default: 42)
+    """
+    
+    def __init__(self, base_dataset, sample_ratio, seed=42):
+        self.base_dataset = base_dataset
+        self.sample_ratio = sample_ratio
+        
+        # Set random seed for reproducibility
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        
+        # Calculate number of samples to use
+        total_samples = len(base_dataset)
+        num_samples = int(total_samples * sample_ratio)
+        
+        # Randomly select indices
+        all_indices = np.arange(total_samples)
+        np.random.shuffle(all_indices)
+        self.sampled_indices = all_indices[:num_samples].tolist()
+        
+        print(f"  📊 Sampling {sample_ratio*100:.1f}% of dataset:")
+        print(f"     Total samples: {total_samples}")
+        print(f"     Sampled: {num_samples} samples")
+        print(f"     Random seed: {seed}")
+    
+    def __len__(self):
+        return len(self.sampled_indices)
+    
+    def __getitem__(self, idx):
+        real_idx = self.sampled_indices[idx]
+        return self.base_dataset[real_idx]
+
+
+class GroupedDataset(Dataset):
+    """
+    Wraps the original dataset to keep only samples from a specific group and remap labels
+    
+    Functionality:
+    1. Filter samples belonging to the specified group
+    2. For multi-label datasets: Keep multi-label format with remapped indices
+    3. For single-label datasets: Remap original labels to [0, num_classes_in_group-1] range
+    
+    Example:
+        Original dataset has 14 classes (0-13)
+        Group 1 contains classes [3, 4, 5, 6, 7, 8]
+        
+        For multi-label:
+        - Original label: [0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+        - Filtered label: [1, 0, 1, 0, 0, 0] (only indices 3,4,5,6,7,8)
+        
+        For single-label:
+        - Original label: 5
+        - Remapped label: 2 (5 is the 3rd element in [3,4,5,6,7,8])
+    
+    Args:
+        base_dataset: Original dataset
+        group_labels: List of original labels in this group, e.g., [3, 4, 5, 6, 7, 8]
+    """
+    
+    def __init__(self, base_dataset, group_labels):
+        self.base_dataset = base_dataset
+        self.group_labels = group_labels
+        self.num_classes_in_group = len(group_labels)
+        
+        # Build label mapping dictionary for single-label case
+        # Example: {3: 0, 4: 1, 5: 2, 6: 3, 7: 4, 8: 5}
+        self.label_mapping = {old_label: new_label 
+                             for new_label, old_label in enumerate(group_labels)}
+        
+        print(f"  Building GroupedDataset for classes {group_labels}...")
+        
+        # Detect if this is a multi-label dataset by checking first sample
+        _, first_label = base_dataset[0]
+        self.is_multilabel = False
+        
+        if isinstance(first_label, (torch.Tensor, np.ndarray)):
+            if hasattr(first_label, 'shape') and len(first_label.shape) > 0:
+                if first_label.shape[0] > 1 or (hasattr(first_label, 'size') and first_label.size > 1):
+                    self.is_multilabel = True
+                    print(f"  ✓ Detected multi-label dataset")
+        
+        # For multi-label datasets, keep ALL samples (including [0,0,0,...])
+        # For single-label datasets, filter by label
+        if self.is_multilabel:
+            # Keep all samples - just extract the relevant labels from each sample
+            self.filtered_indices = list(range(len(base_dataset)))
+            print(f"  ✓ Keeping all {len(self.filtered_indices)} samples (including samples with all zeros)")
+        else:
+            # For single-label: filter samples belonging to this group
+            self.filtered_indices = []
+            for idx in range(len(base_dataset)):
+                _, label = base_dataset[idx]
+                
+                # Handle different label formats
+                if isinstance(label, torch.Tensor):
+                    if label.numel() == 1:
+                        label = label.item()
+                    else:
+                        label = torch.argmax(label).item() if label.dim() > 0 else label.item()
+                elif hasattr(label, 'item'):
+                    if label.size == 1:
+                        label = label.item()
+                    else:
+                        label = int(label.flatten()[0])
+                elif hasattr(label, '__len__') and not isinstance(label, str):
+                    label = int(label[0]) if len(label) > 0 else 0
+                else:
+                    label = int(label)
+                
+                if label in group_labels:
+                    self.filtered_indices.append(idx)
             
+            print(f"  ✓ Group contains {len(self.filtered_indices)} samples "
+                  f"from original {len(base_dataset)} samples")
+            print(f"  ✓ Label mapping: {self.label_mapping}")
+    
+    def __len__(self):
+        return len(self.filtered_indices)
+    
+    def __getitem__(self, idx):
+        # Get original sample
+        real_idx = self.filtered_indices[idx]
+        image, old_label = self.base_dataset[real_idx]
+        
+        if self.is_multilabel:
+            # For multi-label: extract only the labels for this group
+            if isinstance(old_label, torch.Tensor):
+                old_label_array = old_label.numpy()
+            else:
+                old_label_array = np.array(old_label)
+            
+            old_label_flat = old_label_array.flatten()
+            
+            # Create new label vector with only group classes
+            new_label = np.zeros(self.num_classes_in_group, dtype=np.float32)
+            for new_idx, old_idx in enumerate(self.group_labels):
+                if old_idx < len(old_label_flat):
+                    new_label[new_idx] = old_label_flat[old_idx]
+            
+            return image, torch.from_numpy(new_label)
+        else:
+            # For single-label: remap the label
+            if isinstance(old_label, torch.Tensor):
+                if old_label.numel() == 1:
+                    old_label = old_label.item()
+                else:
+                    old_label = torch.argmax(old_label).item() if old_label.dim() > 0 else old_label.item()
+            elif hasattr(old_label, 'item'):
+                if old_label.size == 1:
+                    old_label = old_label.item()
+                else:
+                    old_label = int(old_label.flatten()[0])
+            elif hasattr(old_label, '__len__') and not isinstance(old_label, str):
+                old_label = int(old_label[0]) if len(old_label) > 0 else 0
+            else:
+                old_label = int(old_label)
+            
+            new_label = self.label_mapping[old_label]
+            
+            return image, new_label
+
+
 class PADatasetDownloader:
     def __init__(self, root_dir='data', dataset_url='https://prod-dcd-datasets-cache-zipfiles.s3.eu-west-1.amazonaws.com/zr7vgbcyr2-1.zip'):
         self.root_dir = root_dir
@@ -349,8 +609,6 @@ class KvasirDatasetDownloader:
         
 def build_dataset(args):
     train_transform, test_transform = build_transform(args)
-    #data_dir = args.dataset_dir
-    
     
     if args.dataset == 'Kvasir':
         # Define the sizes for the splits
@@ -406,6 +664,67 @@ def build_dataset(args):
         print("Number of classes: ", nb_classes)
         train_dataset = DataClass(split='train', transform=train_transform, download=True, as_rgb=True, root='./data', size=224, mmap_mode='r')
         test_dataset = DataClass(split='test', transform=test_transform, download=True, as_rgb=True, root='./data', size=224, mmap_mode='r')
+        
+        # ✨ Handle label range training
+        if hasattr(args, 'label_head') and args.label_head is not None and hasattr(args, 'label_tail') and args.label_tail is not None:
+            # Get label range based on sorted order
+            from datasets import get_label_range
+            group_labels = get_label_range(args.dataset, args.label_head, args.label_tail)
+            
+            print(f"\n{'='*60}")
+            print(f"🎯 Label Range Training Mode Enabled")
+            print(f"{'='*60}")
+            print(f"  Sorted order: {get_sorted_label_order(args.dataset)}")
+            print(f"  Range: {args.label_head} to {args.label_tail}")
+            print(f"  Selected classes: {group_labels}")
+            
+            # Wrap dataset with GroupedDataset
+            train_dataset = GroupedDataset(train_dataset, group_labels)
+            test_dataset = GroupedDataset(test_dataset, group_labels)
+            
+            # Update number of classes
+            nb_classes = len(group_labels)
+            print(f"  Final number of classes: {nb_classes}")
+            print(f"{'='*60}\n")
+        # ✨ Handle group training
+        elif hasattr(args, 'group') and args.group is not None:
+            label_groups = get_label_groups(args.dataset)
+            
+            if label_groups is None:
+                raise ValueError(f"Dataset {args.dataset} does not support group training. "
+                               f"Please add group definition in get_label_groups() function.")
+            
+            if args.group < 0 or args.group >= len(label_groups):
+                raise ValueError(f"Group {args.group} is out of range. "
+                               f"Valid groups: 0-{len(label_groups)-1}")
+            
+            print(f"\n{'='*60}")
+            print(f"🎯 Group Training Mode Enabled")
+            print(f"{'='*60}")
+            print(f"  Training Group {args.group} of {len(label_groups)}")
+            
+            group_labels = label_groups[args.group]
+            print(f"  Original classes in this group: {group_labels}")
+            
+            # Wrap dataset with GroupedDataset
+            train_dataset = GroupedDataset(train_dataset, group_labels)
+            test_dataset = GroupedDataset(test_dataset, group_labels)
+            
+            # Update number of classes
+            nb_classes = len(group_labels)
+            print(f"  Final number of classes: {nb_classes}")
+            print(f"{'='*60}\n")
+        
+        # ✨ Handle sampling (apply after grouping if both are specified)
+        if hasattr(args, 'sample') and args.sample is not None:
+            print(f"\n{'='*60}")
+            print(f"📊 Dataset Sampling Enabled")
+            print(f"{'='*60}")
+            train_dataset = SampledDataset(train_dataset, args.sample, seed=42)
+            # Note: We don't sample test dataset to keep full evaluation
+            print(f"  Note: Test dataset is NOT sampled (full evaluation)")
+            print(f"{'='*60}\n")
+        
         return train_dataset, test_dataset, nb_classes
     else:
         raise NotImplementedError()
