@@ -3,6 +3,7 @@ import json
 from torch.utils.data import DataLoader, random_split, Subset, Dataset
 import torch
 import numpy as np
+import matplotlib.pyplot as plt
 
 from torchvision import datasets, transforms
 from torchvision.datasets.folder import ImageFolder, default_loader
@@ -17,16 +18,12 @@ from zipfile import ZipFile
 import pandas as pd
 import shutil
 
+# Import sampler utilities from sampler.py
+from sampler import get_class_index_dict
+
 # Set the random seed for reproducibility
 seed = 42
 torch.manual_seed(seed)
-
-
-import os
-import requests
-from zipfile import ZipFile
-import pandas as pd
-import shutil
 
 root_dir='data'
 if not os.path.exists(root_dir):
@@ -51,7 +48,7 @@ def get_label_groups(dataset_name):
     groups = {
         'chestmnist': [
             [3, 2, 0],                          # Group 0: 3 classes (high frequency)
-            [5, 4, 7, 8, 12, 1, 10, 9],        # Group 1: 8 classes (medium frequency)
+            [5, 4, 7, 8, 12, 1, 10, 9],         # Group 1: 8 classes (medium frequency)
             [11, 6],                            # Group 2: 2 classes (low frequency)
             [13]                                # Group 3: 1 class (very low frequency)
         ],
@@ -131,11 +128,15 @@ class SampledDataset(Dataset):
         base_dataset: Original dataset
         sample_ratio: Fraction of data to use (0 < sample_ratio <= 1.0)
         seed: Random seed for reproducibility (default: 42)
+        dataset_name: Name of the dataset (for saving plots)
+        plot_distribution: Whether to plot distribution comparison (default: True)
     """
     
-    def __init__(self, base_dataset, sample_ratio, seed=42):
+    def __init__(self, base_dataset, sample_ratio, seed=42, dataset_name='dataset', plot_distribution=True):
         self.base_dataset = base_dataset
         self.sample_ratio = sample_ratio
+        self.dataset_name = dataset_name
+        self.plot_distribution = plot_distribution
         
         # Set random seed for reproducibility
         np.random.seed(seed)
@@ -154,6 +155,167 @@ class SampledDataset(Dataset):
         print(f"     Total samples: {total_samples}")
         print(f"     Sampled: {num_samples} samples")
         print(f"     Random seed: {seed}")
+        
+        # Plot original and sampled distribution if enabled
+        if self.plot_distribution:
+            self._plot_distribution_comparison()
+        else:
+            print(f"  ℹ️  Distribution plotting disabled (use --plot_distribution True to enable)")
+
+    def _plot_distribution_comparison(self):
+        """
+        Plot comparison of original and sampled dataset distributions.
+        Handles both single-label and multi-label datasets.
+        """
+        print("  📊 Generating distribution comparison plot...")
+        
+        # Collect labels from original and sampled datasets
+        original_labels = []
+        sampled_labels = []
+        
+        # Check if this is multi-label by examining first sample
+        _, first_label = self.base_dataset[0]
+        is_multilabel = False
+        
+        if isinstance(first_label, (torch.Tensor, np.ndarray)):
+            if hasattr(first_label, 'shape') and len(first_label.shape) > 0:
+                if first_label.shape[0] > 1 or (hasattr(first_label, 'size') and first_label.size > 1):
+                    is_multilabel = True
+        
+        if is_multilabel:
+            # Multi-label case: count presence of each class
+            print("     Detected multi-label dataset")
+            
+            # Get number of classes from first label
+            if isinstance(first_label, torch.Tensor):
+                num_classes = first_label.shape[0]
+            else:
+                num_classes = len(first_label)
+            
+            original_class_counts = np.zeros(num_classes)
+            sampled_class_counts = np.zeros(num_classes)
+            
+            # Count original distribution
+            for idx in range(len(self.base_dataset)):
+                _, label = self.base_dataset[idx]
+                if isinstance(label, torch.Tensor):
+                    label = label.numpy()
+                elif not isinstance(label, np.ndarray):
+                    label = np.array(label)
+                label = label.flatten()
+                original_class_counts += (label > 0).astype(int)
+            
+            # Count sampled distribution
+            for idx in self.sampled_indices:
+                _, label = self.base_dataset[idx]
+                if isinstance(label, torch.Tensor):
+                    label = label.numpy()
+                elif not isinstance(label, np.ndarray):
+                    label = np.array(label)
+                label = label.flatten()
+                sampled_class_counts += (label > 0).astype(int)
+            
+            # Create bar plot
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+            
+            x = np.arange(num_classes)
+            width = 0.35
+            
+            # Absolute counts
+            ax1.bar(x - width/2, original_class_counts, width, label='Original', alpha=0.8, color='steelblue')
+            ax1.bar(x + width/2, sampled_class_counts, width, label=f'Sampled ({self.sample_ratio*100:.1f}%)', alpha=0.8, color='coral')
+            ax1.set_xlabel('Class Label', fontsize=12)
+            ax1.set_ylabel('Number of Samples', fontsize=12)
+            ax1.set_title('Absolute Distribution Comparison (Multi-Label)', fontsize=14, fontweight='bold')
+            ax1.set_xticks(x)
+            ax1.legend(fontsize=11)
+            ax1.grid(axis='y', alpha=0.3)
+            
+            # Percentage comparison
+            original_pct = (original_class_counts / original_class_counts.sum()) * 100
+            sampled_pct = (sampled_class_counts / sampled_class_counts.sum()) * 100
+            
+            ax2.bar(x - width/2, original_pct, width, label='Original', alpha=0.8, color='steelblue')
+            ax2.bar(x + width/2, sampled_pct, width, label=f'Sampled ({self.sample_ratio*100:.1f}%)', alpha=0.8, color='coral')
+            ax2.set_xlabel('Class Label', fontsize=12)
+            ax2.set_ylabel('Percentage (%)', fontsize=12)
+            ax2.set_title('Relative Distribution Comparison (Multi-Label)', fontsize=14, fontweight='bold')
+            ax2.set_xticks(x)
+            ax2.legend(fontsize=11)
+            ax2.grid(axis='y', alpha=0.3)
+            
+        else:
+            # Single-label case
+            print("     Detected single-label dataset")
+            
+            # Collect all labels
+            for idx in range(len(self.base_dataset)):
+                _, label = self.base_dataset[idx]
+                if isinstance(label, torch.Tensor):
+                    label = label.item() if label.numel() == 1 else label.numpy()[0]
+                elif isinstance(label, np.ndarray):
+                    label = int(label.flatten()[0])
+                else:
+                    label = int(label)
+                original_labels.append(label)
+            
+            for idx in self.sampled_indices:
+                _, label = self.base_dataset[idx]
+                if isinstance(label, torch.Tensor):
+                    label = label.item() if label.numel() == 1 else label.numpy()[0]
+                elif isinstance(label, np.ndarray):
+                    label = int(label.flatten()[0])
+                else:
+                    label = int(label)
+                sampled_labels.append(label)
+            
+            # Get unique classes
+            unique_classes = sorted(set(original_labels))
+            num_classes = len(unique_classes)
+            
+            # Count occurrences
+            original_counts = [original_labels.count(c) for c in unique_classes]
+            sampled_counts = [sampled_labels.count(c) for c in unique_classes]
+            
+            # Create bar plot
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+            
+            x = np.arange(num_classes)
+            width = 0.35
+            
+            # Absolute counts
+            ax1.bar(x - width/2, original_counts, width, label='Original', alpha=0.8, color='steelblue')
+            ax1.bar(x + width/2, sampled_counts, width, label=f'Sampled ({self.sample_ratio*100:.1f}%)', alpha=0.8, color='coral')
+            ax1.set_xlabel('Class Label', fontsize=12)
+            ax1.set_ylabel('Number of Samples', fontsize=12)
+            ax1.set_title('Absolute Distribution Comparison (Single-Label)', fontsize=14, fontweight='bold')
+            ax1.set_xticks(x)
+            ax1.set_xticklabels(unique_classes)
+            ax1.legend(fontsize=11)
+            ax1.grid(axis='y', alpha=0.3)
+            
+            # Percentage comparison
+            original_pct = [(c / sum(original_counts)) * 100 for c in original_counts]
+            sampled_pct = [(c / sum(sampled_counts)) * 100 for c in sampled_counts]
+            
+            ax2.bar(x - width/2, original_pct, width, label='Original', alpha=0.8, color='steelblue')
+            ax2.bar(x + width/2, sampled_pct, width, label=f'Sampled ({self.sample_ratio*100:.1f}%)', alpha=0.8, color='coral')
+            ax2.set_xlabel('Class Label', fontsize=12)
+            ax2.set_ylabel('Percentage (%)', fontsize=12)
+            ax2.set_title('Relative Distribution Comparison (Single-Label)', fontsize=14, fontweight='bold')
+            ax2.set_xticks(x)
+            ax2.set_xticklabels(unique_classes)
+            ax2.legend(fontsize=11)
+            ax2.grid(axis='y', alpha=0.3)
+        
+        plt.tight_layout()
+        
+        # Save figure
+        os.makedirs('./results/sampling_plots', exist_ok=True)
+        save_path = f'./results/sampling_plots/{self.dataset_name}_sample{int(self.sample_ratio*100)}_distribution.png'
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"  ✅ Distribution plot saved to: {save_path}")
+        plt.close()
     
     def __len__(self):
         return len(self.sampled_indices)
@@ -161,6 +323,10 @@ class SampledDataset(Dataset):
     def __getitem__(self, idx):
         real_idx = self.sampled_indices[idx]
         return self.base_dataset[real_idx]
+    
+    def get_index_dic(self, list=True, get_labels=True):
+        """Support for ClassAwareSampler - delegate to base dataset then filter indices"""
+        return get_class_index_dict(self)
 
 
 class GroupedDataset(Dataset):
@@ -290,6 +456,10 @@ class GroupedDataset(Dataset):
             new_label = self.label_mapping[old_label]
             
             return image, new_label
+    
+    def get_index_dic(self, list=True, get_labels=True):
+        """Support for ClassAwareSampler"""
+        return get_class_index_dict(self)
 
 
 class PADatasetDownloader:
@@ -720,7 +890,17 @@ def build_dataset(args):
             print(f"\n{'='*60}")
             print(f"📊 Dataset Sampling Enabled")
             print(f"{'='*60}")
-            train_dataset = SampledDataset(train_dataset, args.sample, seed=42)
+            
+            # Get plot_distribution parameter from args
+            plot_dist = args.plot_distribution if hasattr(args, 'plot_distribution') else True
+            
+            train_dataset = SampledDataset(
+                train_dataset, 
+                args.sample, 
+                seed=42, 
+                dataset_name=args.dataset,
+                plot_distribution=plot_dist
+            )
             # Note: We don't sample test dataset to keep full evaluation
             print(f"  Note: Test dataset is NOT sampled (full evaluation)")
             print(f"{'='*60}\n")

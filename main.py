@@ -18,6 +18,8 @@ import torchvision.datasets as dsets
 import torchvision.transforms as transforms
 from torchsummary import summary
 from datasets import build_dataset
+from sampler import ClassAwareSampler
+from losses import get_loss_function
 from distutils.util import strtobool
 from tqdm import tqdm
 import medmnist
@@ -404,19 +406,56 @@ def main(args):
     dataset_name = args.dataset
     pretrained = args.pretrained
     
-    # ✨ Early check: Determine save path and check if training already completed
+    # ✨ Generate hierarchical save path: results/{loss}/{dataset}/{model}/{config}/
+    
+    # Determine loss directory name
+    loss_dir = args.loss_function if args.loss_function else 'default'
+    
+    # Determine config directory name (label range / group / sample / sampler)
+    config_parts = []
+    
     if hasattr(args, 'label_head') and args.label_head is not None:
-        # Label range mode: use head-tail in filename
-        save_path = f'./results/{model_name}_{dataset_name}_class{args.label_head}to{args.label_tail}.pth'
+        # Label range mode
+        config_parts.append(f'class_{args.label_head}_to_{args.label_tail}')
     elif hasattr(args, 'group') and args.group is not None:
         # Group training mode
-        save_path = f'./results/{model_name}_{dataset_name}_group{args.group}.pth'
+        config_parts.append(f'group_{args.group}')
+    
+    if hasattr(args, 'sample') and args.sample is not None:
+        # Sampling mode
+        sample_pct = int(args.sample * 100)
+        config_parts.append(f'sample_{sample_pct}pct')
+    
+    if hasattr(args, 'use_sampler') and args.use_sampler:
+        # Using ClassAwareSampler
+        config_parts.append('sampler')
+    
+    # Build config directory name
+    if config_parts:
+        config_dir = '_'.join(config_parts)
     else:
-        # Original full dataset mode
-        save_path = f'./results/{model_name}_{dataset_name}.pth'
+        config_dir = 'full'
+    
+    # Build full save directory
+    save_dir = os.path.join('./results', loss_dir, dataset_name, model_name, config_dir)
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # Save paths
+    save_path = os.path.join(save_dir, 'model.pth')
+    csv_path = os.path.join(save_dir, 'metrics.csv')
+    
+    # Display save path
+    print(f"\n{'='*60}")
+    print(f"💾 Save Configuration")
+    print(f"{'='*60}")
+    print(f"  Loss function: {loss_dir}")
+    print(f"  Dataset: {dataset_name}")
+    print(f"  Model: {model_name}")
+    print(f"  Config: {config_dir}")
+    print(f"  Save directory: {save_dir}")
+    print(f"{'='*60}\n")
     
     # Check if CSV file already exists
-    csv_path = save_path.replace('.pth', '_metrics.csv')
     if os.path.exists(csv_path):
         print("\n" + "="*60)
         print("⚠️  Training already completed!")
@@ -427,19 +466,6 @@ def main(args):
         print("="*60 + "\n")
         return
     
-    # Determine loss function based on dataset
-    if args.dataset.endswith('mnist'):
-        info = INFO[args.dataset]
-        task = info['task']
-        
-        # Use appropriate loss function based on task type
-        if task == "multi-label, binary-class":
-            loss_function = nn.BCEWithLogitsLoss()
-        else:
-            loss_function = nn.CrossEntropyLoss()
-    else:
-        loss_function = nn.CrossEntropyLoss()
-    
     model_class = model_classes.get(model_name)
 
     batch_size = args.batch_size
@@ -448,6 +474,37 @@ def main(args):
     train_dataset, test_dataset, nb_classes = build_dataset(args=args)
     val_num = len(test_dataset)
     train_num = len(train_dataset)
+    
+    # ✨ Determine task type for loss function selection
+    if args.dataset.endswith('mnist'):
+        info = INFO[args.dataset]
+        task = info['task']
+    else:
+        task = 'multi-class'  # Default for non-MNIST datasets
+    
+    # ✨ Create loss function using get_loss_function
+    print(f"\n{'='*60}")
+    print(f"🎯 Loss Function Configuration")
+    print(f"{'='*60}")
+    
+    if args.loss_function is not None:
+        print(f"  Using custom loss: {args.loss_function}")
+        loss_function = get_loss_function(
+            loss_name=args.loss_function,
+            num_classes=nb_classes,
+            dataset=train_dataset,
+            task=task
+        )
+    else:
+        print(f"  Using default loss for task: {task}")
+        if task == "multi-label, binary-class":
+            loss_function = nn.BCEWithLogitsLoss()
+            print(f"  → BCEWithLogitsLoss")
+        else:
+            loss_function = nn.CrossEntropyLoss()
+            print(f"  → CrossEntropyLoss")
+    
+    print(f"{'='*60}\n")
     
     # scheduler max iteration
     eta = args.epochs * train_num // args.batch_size
@@ -479,7 +536,27 @@ def main(args):
     optimizer = optim.AdamW(net.parameters(), lr=lr, betas=[0.9, 0.999], weight_decay=0.05)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=eta, eta_min=5e-6)
     
-    train_loader = data.DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
+    # ✨ Create DataLoader with optional ClassAwareSampler
+    if hasattr(args, 'use_sampler') and args.use_sampler and dataset_name.endswith('mnist'):
+        # Use ClassAwareSampler for imbalanced datasets
+        sampler = ClassAwareSampler(
+            train_dataset, 
+            num_samples_cls=args.num_samples_cls if hasattr(args, 'num_samples_cls') else 3,
+            reduce=args.sampler_reduce if hasattr(args, 'sampler_reduce') else 4
+        )
+        train_loader = data.DataLoader(
+            dataset=train_dataset, 
+            batch_size=batch_size, 
+            sampler=sampler,
+            num_workers=0  # Important: sampler and shuffle are mutually exclusive
+        )
+        # Update scheduler max iteration based on sampler's epoch length
+        eta = args.epochs * len(sampler) // args.batch_size
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=eta, eta_min=5e-6)
+    else:
+        # Use standard random shuffle
+        train_loader = data.DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
+    
     test_loader = data.DataLoader(dataset=test_dataset, batch_size=2*batch_size, shuffle=False)
     
     print(train_dataset)
@@ -550,8 +627,26 @@ if __name__ == '__main__':
     # ✨ Add sample parameter
     parser.add_argument('--sample', type=float, default=None,
                        help='Fraction of dataset to use for training (0 < sample <= 1.0). '
-                            'E.g., --sample 0.1 uses 10%% of the data. '
+                            'E.g., --sample 0.1 uses 10% of the data. '
                             'If None, uses full dataset.')
+    
+    # ✨ Add plot_distribution parameter
+    parser.add_argument('--plot_distribution', type=lambda x: bool(strtobool(x)), default=False,
+                       help='Whether to plot distribution comparison when using --sample (True/False).')
+    
+    # ✨ Add use_sampler parameter
+    parser.add_argument('--use_sampler', type=lambda x: bool(strtobool(x)), default=False,
+                       help='Whether to use ClassAwareSampler for imbalanced datasets (True/False).')
+    parser.add_argument('--num_samples_cls', type=int, default=3,
+                       help='Number of samples per class for ClassAwareSampler.')
+    parser.add_argument('--sampler_reduce', type=int, default=4,
+                       help='Reduction factor for ClassAwareSampler.')
+    
+    # ✨ Add loss_function parameter
+    parser.add_argument('--loss_function', type=str, default=None,
+                       choices=['BCE', 'CBLoss', 'ASL', 'Focal', 'DBFocal'],
+                       help='Loss function to use. Options: BCE, CBLoss, ASL, Focal, DBFocal. '
+                            'If None, uses default loss (BCEWithLogitsLoss for multi-label, CrossEntropyLoss for single-label).')
 
     args = parser.parse_args()
     
