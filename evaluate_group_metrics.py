@@ -1,6 +1,7 @@
 """
 Evaluate Group Metrics Script
 Extract core group metrics from training results with different label ranges
+Supports new hierarchical directory structure: results/{loss}/{dataset}/{model}/{config}/
 """
 
 import os
@@ -11,16 +12,16 @@ from datasets import get_label_groups
 
 def get_group_core_labels():
     """
-    Define core labels for each group
+    Define core labels for each group based on mean_ir_threshold=2.5, cvir_threshold=0.4
     
     Returns:
         dict: {group_id: [core_labels]}
     """
     return {
-        0: [3, 2, 0],                          # Group 0 core
-        1: [5, 4, 7, 8, 12, 1, 10, 9],        # Group 1 core
-        2: [11, 6],                            # Group 2 core
-        3: [13]                                # Group 3 core
+        0: [3, 2, 0],                          # Group 0 core (3 classes)
+        1: [5, 4, 7, 8, 12, 1, 10, 9],        # Group 1 core (8 classes)
+        2: [11, 6],                            # Group 2 core (2 classes)
+        3: [13]                                # Group 3 core (1 class)
     }
 
 
@@ -86,32 +87,72 @@ def extract_core_metrics(csv_path, core_labels):
     return metrics
 
 
-def parse_filename_range(filename):
+def find_metrics_files(results_dir='results', loss_function='default', dataset='chestmnist', model_name='MedViT_tiny'):
     """
-    Parse label range from filename
+    Find all metrics.csv files in the hierarchical directory structure
     
     Args:
-        filename: e.g., 'MedViT_tiny_chestmnist_class3to5_metrics.csv'
+        results_dir: Base results directory
+        loss_function: Loss function directory name
+        dataset: Dataset name
+        model_name: Model name
         
     Returns:
-        tuple: (head, tail) or None if not a range file
+        list: List of tuples (csv_path, config_name, head, tail)
     """
-    import re
-    match = re.search(r'class(\d+)to(\d+)', filename)
-    if match:
-        return int(match.group(1)), int(match.group(2))
-    return None
+    found_files = []
+    
+    # New hierarchical structure: results/{loss}/{dataset}/{model}/{config}/metrics.csv
+    base_path = os.path.join(results_dir, loss_function, dataset, model_name)
+    
+    if not os.path.exists(base_path):
+        print(f"  ⚠️  Path not found: {base_path}")
+        return found_files
+    
+    # Scan all config directories
+    for config_dir in os.listdir(base_path):
+        config_path = os.path.join(base_path, config_dir)
+        
+        if not os.path.isdir(config_path):
+            continue
+        
+        metrics_path = os.path.join(config_path, 'metrics.csv')
+        
+        if not os.path.exists(metrics_path):
+            continue
+        
+        # Parse config directory name to extract label range
+        # Format: class_{head}_to_{tail} or group_{id} or full
+        if config_dir.startswith('class_'):
+            # Extract head and tail from "class_3_to_0"
+            parts = config_dir.split('_')
+            if len(parts) >= 4 and parts[0] == 'class' and parts[2] == 'to':
+                try:
+                    head = int(parts[1])
+                    tail = int(parts[3])
+                    found_files.append((metrics_path, config_dir, head, tail))
+                except ValueError:
+                    continue
+        elif config_dir.startswith('group_'):
+            # Skip group files for now (they use old format)
+            continue
+        elif config_dir == 'full':
+            # Full dataset training
+            continue
+    
+    return found_files
 
 
-def evaluate_group_experiments(group_id, results_dir='results', model_name='MedViT_tiny', dataset='chestmnist'):
+def evaluate_group_experiments(group_id, results_dir='results', loss_function='default', dataset='chestmnist', model_name='MedViT_tiny'):
     """
     Evaluate all experiments for a specific group
     
     Args:
         group_id: Group ID (0-3)
         results_dir: Directory containing results
-        model_name: Model name used in training
+        loss_function: Loss function used
         dataset: Dataset name
+        model_name: Model name used in training
         
     Returns:
         DataFrame: Summary of all experiments for this group
@@ -122,23 +163,17 @@ def evaluate_group_experiments(group_id, results_dir='results', model_name='MedV
     print(f"Evaluating Group {group_id} (Core labels: {core_labels})")
     print(f"{'='*60}")
     
-    # Find all CSV files that might contain this group's training results
+    # Find all metrics files
+    found_files = find_metrics_files(results_dir, loss_function, dataset, model_name)
+    
+    if not found_files:
+        print(f"  ⚠️  No results found for group {group_id}")
+        return None
+    
+    # Filter and process files that contain all core labels
     all_results = []
     
-    for filename in os.listdir(results_dir):
-        if not filename.endswith('_metrics.csv'):
-            continue
-        
-        if not filename.startswith(f'{model_name}_{dataset}_class'):
-            continue
-        
-        # Parse label range from filename
-        label_range = parse_filename_range(filename)
-        if label_range is None:
-            continue
-        
-        head, tail = label_range
-        
+    for csv_path, config_name, head, tail in found_files:
         # Check if this training range includes ALL core labels for this group
         from datasets import get_label_range
         try:
@@ -151,7 +186,6 @@ def evaluate_group_experiments(group_id, results_dir='results', model_name='MedV
             continue
         
         # Extract metrics
-        csv_path = os.path.join(results_dir, filename)
         metrics = extract_core_metrics(csv_path, core_labels)
         
         if metrics is None:
@@ -162,13 +196,14 @@ def evaluate_group_experiments(group_id, results_dir='results', model_name='MedV
         metrics['label_tail'] = tail
         metrics['num_labels_trained'] = len(trained_labels)
         metrics['trained_labels'] = str(trained_labels)
+        metrics['config_name'] = config_name
         
         all_results.append(metrics)
         
-        print(f"  ✓ Processed: {filename} (labels {head}-{tail}, {len(trained_labels)} classes)")
+        print(f"  ✓ Processed: {config_name} (labels {head}-{tail}, {len(trained_labels)} classes)")
     
     if not all_results:
-        print(f"  ⚠️  No results found for group {group_id}")
+        print(f"  ⚠️  No matching results found for group {group_id}")
         return None
     
     # Create DataFrame
@@ -184,6 +219,7 @@ def main():
     """Main function to evaluate all groups"""
     print("\n" + "="*60)
     print("🎯 Group-wise Metrics Evaluation")
+    print("   (mean_ir_threshold=2.5, cvir_threshold=0.4)")
     print("="*60)
     
     results_dir = 'results'
@@ -192,10 +228,11 @@ def main():
     
     model_name = 'MedViT_tiny'
     dataset = 'chestmnist'
+    loss_function = 'default'  # Change this if you use a different loss
     
     # Evaluate each group
     for group_id in range(4):
-        df = evaluate_group_experiments(group_id, results_dir, model_name, dataset)
+        df = evaluate_group_experiments(group_id, results_dir, loss_function, dataset, model_name)
         
         if df is not None:
             # Save to CSV

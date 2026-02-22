@@ -216,7 +216,7 @@ def compute_chestmnist_groups(data_root: str = './data') -> List[List[int]]:
     label_count_str = {str(k): v for k, v in label_count.items()}
     
     # Apply DP grouping algorithm
-    grouper = DPLabelGrouper(mean_ir_threshold=2.5, cvir_threshold=0.4)
+    grouper = DPLabelGrouper(mean_ir_threshold=3.5, cvir_threshold=0.6)
     groups_str = grouper.group_label(label_count_str)
     
     # Convert back to integers
