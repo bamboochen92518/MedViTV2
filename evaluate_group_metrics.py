@@ -116,15 +116,18 @@ def find_metrics_files(results_dir='results', loss_function='default', dataset='
         if not os.path.isdir(config_path):
             continue
         
-        metrics_path = os.path.join(config_path, 'metrics.csv')
+        # Try both possible filenames
+        metrics_path = os.path.join(config_path, 'model_metrics.csv')
+        if not os.path.exists(metrics_path):
+            metrics_path = os.path.join(config_path, 'metrics.csv')
         
         if not os.path.exists(metrics_path):
             continue
         
         # Parse config directory name to extract label range
-        # Format: class_{head}_to_{tail} or group_{id} or full
+        # Format: class_{head}_to_{tail}_sample_{pct}pct or class_{head}_to_{tail} or group_{id} or full
         if config_dir.startswith('class_'):
-            # Extract head and tail from "class_3_to_0"
+            # Extract head and tail from "class_3_to_0_sample_10pct" or "class_3_to_0"
             parts = config_dir.split('_')
             if len(parts) >= 4 and parts[0] == 'class' and parts[2] == 'to':
                 try:
@@ -209,8 +212,8 @@ def evaluate_group_experiments(group_id, results_dir='results', loss_function='d
     # Create DataFrame
     df = pd.DataFrame(all_results)
     
-    # Sort by core_mAP (descending)
-    df = df.sort_values('core_mAP', ascending=False)
+    # Sort by core_AUC (descending)
+    df = df.sort_values('core_AUC', ascending=False)
     
     return df
 
@@ -223,7 +226,7 @@ def main():
     print("="*60)
     
     results_dir = 'results'
-    output_dir = 'results/group_evaluation'
+    output_dir = 'results/grouping_expanding_algo_evaluation'
     os.makedirs(output_dir, exist_ok=True)
     
     model_name = 'MedViT_tiny'

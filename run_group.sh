@@ -53,7 +53,15 @@ python main.py --model_name "$MODEL_NAME" --dataset "$DATASET" --sample $SAMPLE 
 echo "Training Group 5: [13]"
 python main.py --model_name "$MODEL_NAME" --dataset "$DATASET" --sample $SAMPLE --label_head 13 --label_tail 13 --epochs $EPOCHS
 
-echo "✅ Experiment 1 completed!"
+echo "✅ Experiment 1 training completed!"
+echo ""
+echo "📊 Aggregating Experiment 1 results..."
+python aggregate_group_results.py \
+    --model_name "$MODEL_NAME" \
+    --dataset "$DATASET" \
+    --experiment_name "exp1_ir1.5_cvir0.2" \
+    --group_configs "3,3" "2,0" "5,8" "12,9" "11,6" "13,13" \
+    --sample $SAMPLE
 echo ""
 
 # ============================================================
@@ -80,7 +88,15 @@ python main.py --model_name "$MODEL_NAME" --dataset "$DATASET" --sample $SAMPLE 
 echo "Training Group 3: [13]"
 python main.py --model_name "$MODEL_NAME" --dataset "$DATASET" --sample $SAMPLE --label_head 13 --label_tail 13 --epochs $EPOCHS
 
-echo "✅ Experiment 2 completed!"
+echo "✅ Experiment 2 training completed!"
+echo ""
+echo "📊 Aggregating Experiment 2 results..."
+python aggregate_group_results.py \
+    --model_name "$MODEL_NAME" \
+    --dataset "$DATASET" \
+    --experiment_name "exp2_ir2.5_cvir0.4" \
+    --group_configs "3,0" "5,9" "11,6" "13,13" \
+    --sample $SAMPLE
 echo ""
 
 # ============================================================
@@ -103,7 +119,15 @@ python main.py --model_name "$MODEL_NAME" --dataset "$DATASET" --sample $SAMPLE 
 echo "Training Group 2: [13]"
 python main.py --model_name "$MODEL_NAME" --dataset "$DATASET" --sample $SAMPLE --label_head 13 --label_tail 13 --epochs $EPOCHS
 
-echo "✅ Experiment 3 completed!"
+echo "✅ Experiment 3 training completed!"
+echo ""
+echo "📊 Aggregating Experiment 3 results..."
+python aggregate_group_results.py \
+    --model_name "$MODEL_NAME" \
+    --dataset "$DATASET" \
+    --experiment_name "exp3_ir3.5_cvir0.6" \
+    --group_configs "3,12" "1,6" "13,13" \
+    --sample $SAMPLE
 echo ""
 
 # ============================================================
@@ -115,5 +139,14 @@ echo "============================================================"
 echo "Total experiments run: 3 grouping strategies"
 echo "Total groups trained: 13 models"
 echo "Results saved in: ./results/"
+echo "Aggregated results in: ./results/group_evaluation/"
+echo ""
+echo "📊 Summary files generated:"
+echo "  - exp1_ir1.5_cvir0.2_per_class.csv"
+echo "  - exp1_ir1.5_cvir0.2_tier_summary.csv"
+echo "  - exp2_ir2.5_cvir0.4_per_class.csv"
+echo "  - exp2_ir2.5_cvir0.4_tier_summary.csv"
+echo "  - exp3_ir3.5_cvir0.6_per_class.csv"
+echo "  - exp3_ir3.5_cvir0.6_tier_summary.csv"
 echo "============================================================"
 echo ""

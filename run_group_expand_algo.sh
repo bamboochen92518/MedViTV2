@@ -51,9 +51,6 @@ for head in "${GROUP0_HEADS[@]}"; do
             echo "❌ Training failed for head=$head, tail=$tail"
         else
             echo "✅ Training completed for head=$head, tail=$tail"
-            echo "📊 Evaluating Group 0 metrics..."
-            python evaluate_group_metrics.py --model_name "$MODEL_NAME" --dataset "$DATASET" \
-                --label_head $head --label_tail $tail --group 0
         fi
     done
 done
@@ -84,9 +81,6 @@ for head in "${GROUP1_HEADS[@]}"; do
             echo "❌ Training failed for head=$head, tail=$tail"
         else
             echo "✅ Training completed for head=$head, tail=$tail"
-            echo "📊 Evaluating Group 1 metrics..."
-            python evaluate_group_metrics.py --model_name "$MODEL_NAME" --dataset "$DATASET" \
-                --label_head $head --label_tail $tail --group 1
         fi
     done
 done
@@ -117,9 +111,6 @@ for head in "${GROUP2_HEADS[@]}"; do
             echo "❌ Training failed for head=$head, tail=$tail"
         else
             echo "✅ Training completed for head=$head, tail=$tail"
-            echo "📊 Evaluating Group 2 metrics..."
-            python evaluate_group_metrics.py --model_name "$MODEL_NAME" --dataset "$DATASET" \
-                --label_head $head --label_tail $tail --group 2
         fi
     done
 done
@@ -150,9 +141,6 @@ for head in "${GROUP3_HEADS[@]}"; do
             echo "❌ Training failed for head=$head, tail=$tail"
         else
             echo "✅ Training completed for head=$head, tail=$tail"
-            echo "📊 Evaluating Group 3 metrics..."
-            python evaluate_group_metrics.py --model_name "$MODEL_NAME" --dataset "$DATASET" \
-                --label_head $head --label_tail $tail --group 3
         fi
     done
 done
@@ -169,9 +157,55 @@ echo "  Group 2: 12 heads × 2 tails = 24 experiments"
 echo "  Group 3: 14 heads × 1 tail = 14 experiments"
 echo "  Total: 90 experiments"
 echo ""
-echo "📊 Group evaluation results saved to:"
-echo "  - results/group_evaluation/group0_evaluation.csv"
-echo "  - results/group_evaluation/group1_evaluation.csv"
-echo "  - results/group_evaluation/group2_evaluation.csv"
-echo "  - results/group_evaluation/group3_evaluation.csv"
+
+# ============================================================
+# Evaluate Group Metrics
+# ============================================================
+echo ""
+echo "============================================================"
+echo "📊 Evaluating Group Metrics"
+echo "============================================================"
+echo ""
+echo "Running evaluate_group_metrics.py to extract core metrics..."
+python evaluate_group_metrics.py
+
+if [ $? -ne 0 ]; then
+    echo "❌ Group metrics evaluation failed"
+else
+    echo "✅ Group metrics evaluation completed"
+fi
+
+# ============================================================
+# Merge and Analyze Group Results
+# ============================================================
+echo ""
+echo "============================================================"
+echo "🔄 Merging Group Evaluations and Analyzing Best Configs"
+echo "============================================================"
+echo ""
+echo "Running merge_group_expanding_algo_evaluations.py..."
+python merge_group_expanding_algo_evaluations.py --eval_dir results/grouping_expanding_algo_evaluation
+
+if [ $? -ne 0 ]; then
+    echo "❌ Merging and analysis failed"
+else
+    echo "✅ Merging and analysis completed"
+fi
+
+echo ""
+echo "============================================================"
+echo "🎉 All Tasks Completed!"
+echo "============================================================"
+echo ""
+echo "📊 Results saved to:"
+echo "  - Group evaluations: results/grouping_expanding_algo_evaluation/"
+echo "    • group0_evaluation.csv"
+echo "    • group1_evaluation.csv"
+echo "    • group2_evaluation.csv"
+echo "    • group3_evaluation.csv"
+echo "  - Merged results:"
+echo "    • all_groups_merged.csv"
+echo "    • best_configs_summary.csv"
+echo "    • best_configs_tier_analysis.csv"
+echo "    • comprehensive_report.txt"
 echo "============================================================"

@@ -442,7 +442,7 @@ def main(args):
     
     # Save paths
     save_path = os.path.join(save_dir, 'model.pth')
-    csv_path = os.path.join(save_dir, 'metrics.csv')
+    csv_path = os.path.join(save_dir, 'model_metrics.csv')
     
     # Display save path
     print(f"\n{'='*60}")
@@ -644,8 +644,8 @@ if __name__ == '__main__':
     
     # ✨ Add loss_function parameter
     parser.add_argument('--loss_function', type=str, default=None,
-                       choices=['BCE', 'CBLoss', 'ASL', 'Focal', 'DBFocal'],
-                       help='Loss function to use. Options: BCE, CBLoss, ASL, Focal, DBFocal. '
+                       choices=['BCE', 'CBLoss', 'CBLossOriginal', 'ASL', 'Focal', 'DBFocal'],
+                       help='Loss function to use. Options: BCE, CBLoss, CBLossOriginal, ASL, Focal, DBFocal. '
                             'If None, uses default loss (BCEWithLogitsLoss for multi-label, CrossEntropyLoss for single-label).')
 
     args = parser.parse_args()

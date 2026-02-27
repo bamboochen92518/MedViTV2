@@ -6,7 +6,8 @@ in medical image classification tasks, particularly for multi-label scenarios.
 
 Available Loss Functions:
     - BCELoss: Binary Cross Entropy Loss
-    - CBLoss: Class-Balanced Loss
+    - CBLoss: Class-Balanced Loss (Re-implementation)
+    - CBLossOriginal: Class-Balanced Loss (Original Official Implementation)
     - ASLoss: Asymmetric Loss (for multi-label)
     - FocalLoss: Focal Loss (for hard examples)
     - DBFocalLoss: Distribution-Balanced Focal Loss (for long-tail)
@@ -22,7 +23,7 @@ Usage:
 """
 
 from .bce_loss import BCELoss
-from .cb_loss import CBLoss
+from .cb_loss import CBLoss, CBLossOriginal
 from .asl_loss import ASLoss, ASLSingleLabel
 from .focal_loss import FocalLoss
 from .dbfocal_loss import DBFocalLoss, ResampleLoss
@@ -31,6 +32,7 @@ from .dbfocal_loss import DBFocalLoss, ResampleLoss
 __all__ = [
     'BCELoss',
     'CBLoss',
+    'CBLossOriginal',
     'ASLoss',
     'ASLSingleLabel',
     'FocalLoss',
@@ -46,7 +48,7 @@ def get_loss_function(loss_name, num_classes, dataset=None, task='multi-label, b
     
     Args:
         loss_name (str): Name of the loss function
-            Options: 'BCE', 'CBLoss', 'ASL', 'Focal', 'DBFocal', 'default'
+            Options: 'BCE', 'CBLoss', 'CBLossOriginal', 'ASL', 'Focal', 'DBFocal', 'default'
         num_classes (int): Number of classes
         dataset: Training dataset (needed for CBLoss and DBFocal to calculate class weights)
         task (str): Task type ('multi-label, binary-class' or 'multi-class')
@@ -78,6 +80,12 @@ def get_loss_function(loss_name, num_classes, dataset=None, task='multi-label, b
                            "Please pass dataset parameter.")
         return CBLoss(dataset=dataset, num_classes=num_classes, **kwargs)
     
+    elif loss_name == 'CBLOSSORIGINAL' or loss_name == 'CBORIGINAL' or loss_name == 'CB_ORIGINAL':
+        if dataset is None:
+            raise ValueError("CBLossOriginal requires dataset to calculate class weights. "
+                           "Please pass dataset parameter.")
+        return CBLossOriginal(dataset=dataset, num_classes=num_classes, **kwargs)
+    
     elif loss_name == 'ASL':
         if task == 'multi-label, binary-class':
             return ASLoss(**kwargs)
@@ -97,4 +105,4 @@ def get_loss_function(loss_name, num_classes, dataset=None, task='multi-label, b
     
     else:
         raise ValueError(f"Unknown loss function: {loss_name}. "
-                        f"Available options: 'default', 'BCE', 'CBLoss', 'ASL', 'Focal', 'DBFocal'")
+                        f"Available options: 'default', 'BCE', 'CBLoss', 'CBLossOriginal', 'ASL', 'Focal', 'DBFocal'")
