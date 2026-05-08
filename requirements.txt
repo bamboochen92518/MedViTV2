@@ -3,6 +3,7 @@ timm
 medmnist==3.0.2
 numpy
 pandas
+matplotlib
 scikit-learn
 scikit-image
 fvcore

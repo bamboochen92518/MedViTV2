@@ -425,6 +425,10 @@ def main(args):
         # Sampling mode
         sample_pct = int(args.sample * 100)
         config_parts.append(f'sample_{sample_pct}pct')
+
+    if hasattr(args, 'class_balanced_sampling') and args.class_balanced_sampling:
+        bal_str = f"{args.class_balanced_alpha:.2f}".replace('.', 'p')
+        config_parts.append(f'clsbal_a{bal_str}')
     
     if hasattr(args, 'use_sampler') and args.use_sampler:
         # Using ClassAwareSampler
@@ -439,6 +443,9 @@ def main(args):
     # Build full save directory
     save_dir = os.path.join('./results', loss_dir, dataset_name, model_name, config_dir)
     os.makedirs(save_dir, exist_ok=True)
+
+    # Expose save dir to dataset builder for optional per-run artifacts.
+    args.result_save_dir = save_dir
     
     # Save paths
     save_path = os.path.join(save_dir, 'model.pth')
@@ -629,7 +636,12 @@ if __name__ == '__main__':
                        help='Fraction of dataset to use for training (0 < sample <= 1.0). '
                             'E.g., --sample 0.1 uses 10% of the data. '
                             'If None, uses full dataset.')
-    
+
+    parser.add_argument('--class_balanced_sampling', type=lambda x: bool(strtobool(x)), default=False,
+                       help='Whether to apply inverse-frequency (class-balanced) sampling when --sample is enabled.')
+    parser.add_argument('--class_balanced_alpha', type=float, default=1.0,
+                       help='Strength of class-balanced rebalancing. 0.0 = uniform; 1.0 = full inverse-freq; >1 = stronger.')
+
     # ✨ Add plot_distribution parameter
     parser.add_argument('--plot_distribution', type=lambda x: bool(strtobool(x)), default=False,
                        help='Whether to plot distribution comparison when using --sample (True/False).')
@@ -644,8 +656,8 @@ if __name__ == '__main__':
     
     # ✨ Add loss_function parameter
     parser.add_argument('--loss_function', type=str, default=None,
-                       choices=['BCE', 'CBLoss', 'CBLossOriginal', 'ASL', 'Focal', 'DBFocal'],
-                       help='Loss function to use. Options: BCE, CBLoss, CBLossOriginal, ASL, Focal, DBFocal. '
+                       choices=['BCE', 'CBLoss', 'CBLossOriginal', 'ASL', 'Focal', 'DBFocal', 'LDACE_CCL', 'LDACE', 'CCL'],
+                       help='Loss function to use. Options: BCE, CBLoss, CBLossOriginal, ASL, Focal, DBFocal, LDACE_CCL, LDACE, CCL. '
                             'If None, uses default loss (BCEWithLogitsLoss for multi-label, CrossEntropyLoss for single-label).')
 
     args = parser.parse_args()
@@ -661,7 +673,7 @@ if __name__ == '__main__':
     # Validate sample parameter
     if args.sample is not None and (args.sample <= 0 or args.sample > 1.0):
         parser.error("--sample must be between 0 and 1.0 (exclusive of 0, inclusive of 1.0)")
-    
+
     main(args)
 
 # python main.py --model_name 'convnext_tiny' --dataset 'PAD'

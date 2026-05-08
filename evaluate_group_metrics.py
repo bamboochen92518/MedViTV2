@@ -34,15 +34,15 @@ def extract_core_metrics(csv_path, core_labels):
         core_labels: List of core label indices to extract
         
     Returns:
-        dict: Metrics for the best epoch based on mAP
+        dict: Metrics for the best epoch based on auc
     """
     if not os.path.exists(csv_path):
         return None
     
     df = pd.read_csv(csv_path)
     
-    # Find the epoch with best mAP
-    best_epoch_idx = df['mAP'].idxmax()
+    # Find the epoch with best auc
+    best_epoch_idx = df['auc'].idxmax()
     best_epoch_row = df.iloc[best_epoch_idx]
     
     # Extract AUC values for core labels
@@ -212,8 +212,8 @@ def evaluate_group_experiments(group_id, results_dir='results', loss_function='d
     # Create DataFrame
     df = pd.DataFrame(all_results)
     
-    # Sort by core_AUC (descending)
-    df = df.sort_values('core_AUC', ascending=False)
+    # Sort by core_mean_auc (descending)
+    df = df.sort_values('core_mean_auc', ascending=False)
     
     return df
 

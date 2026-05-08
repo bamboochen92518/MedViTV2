@@ -162,6 +162,20 @@ class SampledDataset(Dataset):
         else:
             print(f"  ℹ️  Distribution plotting disabled (use --plot_distribution True to enable)")
 
+    def _print_cooccurrence_table(self, cooccurrence_matrix, num_classes):
+        """
+        Print co-occurrence matrix in a readable table format.
+        """
+        print("     ", end="")
+        for j in range(num_classes):
+            print(f"Label_{j:2d} ", end="")
+        print()
+        for i in range(num_classes):
+            print(f"Label_{i:2d} ", end="")
+            for j in range(num_classes):
+                print(f"{cooccurrence_matrix[i, j]:8d} ", end="")
+            print()
+
     def _plot_distribution_comparison(self):
         """
         Plot comparison of original and sampled dataset distributions.
@@ -195,6 +209,10 @@ class SampledDataset(Dataset):
             original_class_counts = np.zeros(num_classes)
             sampled_class_counts = np.zeros(num_classes)
             
+            # ✨ Initialize co-occurrence matrices
+            original_cooccurrence = np.zeros((num_classes, num_classes), dtype=int)
+            sampled_cooccurrence = np.zeros((num_classes, num_classes), dtype=int)
+            
             # Count original distribution
             for idx in range(len(self.base_dataset)):
                 _, label = self.base_dataset[idx]
@@ -204,6 +222,12 @@ class SampledDataset(Dataset):
                     label = np.array(label)
                 label = label.flatten()
                 original_class_counts += (label > 0).astype(int)
+                
+                # ✨ Count co-occurrences for original dataset
+                active_labels = np.where(label > 0)[0]
+                for i in active_labels:
+                    for j in active_labels:
+                        original_cooccurrence[i, j] += 1
             
             # Count sampled distribution
             for idx in self.sampled_indices:
@@ -214,8 +238,88 @@ class SampledDataset(Dataset):
                     label = np.array(label)
                 label = label.flatten()
                 sampled_class_counts += (label > 0).astype(int)
+                
+                # ✨ Count co-occurrences for sampled dataset
+                active_labels = np.where(label > 0)[0]
+                for i in active_labels:
+                    for j in active_labels:
+                        sampled_cooccurrence[i, j] += 1
             
-            # Create bar plot
+            # ✨ Print co-occurrence matrices
+            print("\n  📊 Label Co-occurrence Analysis:")
+            print("  " + "="*70)
+            print("  Original Dataset - Samples with both Label i AND Label j:")
+            self._print_cooccurrence_table(original_cooccurrence, num_classes)
+            
+            print("\n  Sampled Dataset - Samples with both Label i AND Label j:")
+            self._print_cooccurrence_table(sampled_cooccurrence, num_classes)
+            print("  " + "="*70 + "\n")
+            
+            # ✨ Save co-occurrence matrices as CSV
+            os.makedirs('./results/sampling_plots', exist_ok=True)
+            original_csv_path = f'./results/sampling_plots/{self.dataset_name}_sample{int(self.sample_ratio*100)}_original_cooccurrence.csv'
+            sampled_csv_path = f'./results/sampling_plots/{self.dataset_name}_sample{int(self.sample_ratio*100)}_sampled_cooccurrence.csv'
+            
+            # Create DataFrame with proper labels
+            df_original = pd.DataFrame(original_cooccurrence, 
+                                      index=[f'Label_{i}' for i in range(num_classes)],
+                                      columns=[f'Label_{i}' for i in range(num_classes)])
+            df_sampled = pd.DataFrame(sampled_cooccurrence,
+                                     index=[f'Label_{i}' for i in range(num_classes)],
+                                     columns=[f'Label_{i}' for i in range(num_classes)])
+            
+            df_original.to_csv(original_csv_path)
+            df_sampled.to_csv(sampled_csv_path)
+            print(f"  ✅ Co-occurrence matrices saved:")
+            print(f"     Original: {original_csv_path}")
+            print(f"     Sampled: {sampled_csv_path}")
+            
+            # ✨ Visualize co-occurrence matrices as heatmaps
+            fig_cooccur, (ax_orig, ax_samp) = plt.subplots(1, 2, figsize=(18, 7))
+            
+            # Original co-occurrence heatmap
+            im1 = ax_orig.imshow(original_cooccurrence, cmap='YlOrRd', aspect='auto')
+            ax_orig.set_xlabel('Label j', fontsize=12)
+            ax_orig.set_ylabel('Label i', fontsize=12)
+            ax_orig.set_title('Original Dataset: Co-occurrence Matrix\n(samples with both label i AND j)', 
+                             fontsize=14, fontweight='bold')
+            ax_orig.set_xticks(range(num_classes))
+            ax_orig.set_yticks(range(num_classes))
+            
+            # Add text annotations
+            for i in range(num_classes):
+                for j in range(num_classes):
+                    text = ax_orig.text(j, i, original_cooccurrence[i, j],
+                                       ha="center", va="center", color="black" if original_cooccurrence[i, j] < original_cooccurrence.max()/2 else "white",
+                                       fontsize=8)
+            
+            plt.colorbar(im1, ax=ax_orig, label='Number of Samples')
+            
+            # Sampled co-occurrence heatmap
+            im2 = ax_samp.imshow(sampled_cooccurrence, cmap='YlOrRd', aspect='auto')
+            ax_samp.set_xlabel('Label j', fontsize=12)
+            ax_samp.set_ylabel('Label i', fontsize=12)
+            ax_samp.set_title(f'Sampled Dataset ({self.sample_ratio*100:.1f}%): Co-occurrence Matrix\n(samples with both label i AND j)', 
+                             fontsize=14, fontweight='bold')
+            ax_samp.set_xticks(range(num_classes))
+            ax_samp.set_yticks(range(num_classes))
+            
+            # Add text annotations
+            for i in range(num_classes):
+                for j in range(num_classes):
+                    text = ax_samp.text(j, i, sampled_cooccurrence[i, j],
+                                       ha="center", va="center", color="black" if sampled_cooccurrence[i, j] < sampled_cooccurrence.max()/2 else "white",
+                                       fontsize=8)
+            
+            plt.colorbar(im2, ax=ax_samp, label='Number of Samples')
+            
+            plt.tight_layout()
+            cooccur_plot_path = f'./results/sampling_plots/{self.dataset_name}_sample{int(self.sample_ratio*100)}_cooccurrence.png'
+            plt.savefig(cooccur_plot_path, dpi=300, bbox_inches='tight')
+            print(f"  ✅ Co-occurrence heatmap saved to: {cooccur_plot_path}\n")
+            plt.close()
+            
+            # Create bar plot (existing code)
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
             
             x = np.arange(num_classes)
@@ -326,6 +430,146 @@ class SampledDataset(Dataset):
     
     def get_index_dic(self, list=True, get_labels=True):
         """Support for ClassAwareSampler - delegate to base dataset then filter indices"""
+        return get_class_index_dict(self)
+
+
+class ClassBalancedSampledDataset(Dataset):
+    """
+    Sample a subset with probability biased by inverse class frequency to reduce imbalance.
+
+    For each sample i with active label set A_i, the per-sample inverse-frequency weight is
+        inv_i = mean_{l in A_i}(1 / n_l)        (n_l = positive count of label l)
+    where labels are counted within the (possibly grouped) base dataset's local label space.
+
+    The final sampling weight is
+        w_i = (inv_i / inv_max) ** alpha_balance
+    so that:
+        alpha_balance = 0  -> uniform random sampling (no rebalancing)
+        alpha_balance = 1  -> classic inverse-frequency rebalancing
+        alpha_balance > 1  -> stronger rebalancing toward rare-label samples
+
+    Samples with no active labels receive the minimum non-zero weight.
+
+    This isolates the IMBALANCE axis: label set is unchanged, only sampling distribution changes.
+    """
+
+    def __init__(self, base_dataset, sample_ratio, alpha_balance=1.0, seed=42,
+                 dataset_name='dataset', save_dir=None):
+        self.base_dataset = base_dataset
+        self.sample_ratio = sample_ratio
+        self.alpha_balance = float(alpha_balance)
+        self.dataset_name = dataset_name
+        self.save_dir = save_dir
+
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+
+        total_samples = len(base_dataset)
+        num_samples = int(total_samples * sample_ratio)
+
+        # Probe label dimension.
+        _, first_label = self.base_dataset[0]
+        if isinstance(first_label, torch.Tensor):
+            label_dim = int(first_label.numel())
+        else:
+            label_dim = int(np.array(first_label).size)
+
+        # Collect all labels once.
+        all_labels = np.zeros((total_samples, label_dim), dtype=np.int8)
+        for idx in range(total_samples):
+            _, label = self.base_dataset[idx]
+            if isinstance(label, torch.Tensor):
+                arr = label.cpu().numpy().flatten()
+            else:
+                arr = np.array(label).flatten()
+            all_labels[idx] = arr.astype(np.int8)
+
+        class_counts = all_labels.sum(axis=0).astype(np.float64)
+        # Avoid div-by-zero: labels never present get a large count placeholder so they don't dominate.
+        safe_counts = np.where(class_counts > 0, class_counts, total_samples)
+        inv_freq = 1.0 / safe_counts
+
+        inv_per_sample = np.zeros(total_samples, dtype=np.float64)
+        for i in range(total_samples):
+            active = np.where(all_labels[i] > 0)[0]
+            if active.size > 0:
+                inv_per_sample[i] = inv_freq[active].mean()
+
+        # Samples with no active labels: give them the minimum positive weight.
+        positive_mask = inv_per_sample > 0
+        if positive_mask.any():
+            inv_per_sample[~positive_mask] = inv_per_sample[positive_mask].min()
+        else:
+            inv_per_sample[:] = 1.0
+
+        # Normalize then power.
+        inv_max = inv_per_sample.max()
+        normalized = inv_per_sample / inv_max if inv_max > 0 else inv_per_sample
+
+        if self.alpha_balance == 0.0:
+            weights = np.ones(total_samples, dtype=np.float64)
+        else:
+            weights = np.power(normalized, self.alpha_balance)
+
+        probs = weights / weights.sum()
+        sampled_idx = np.random.choice(total_samples, size=num_samples, replace=False, p=probs)
+        self.sampled_indices = sampled_idx.tolist()
+
+        sampled_label_counts = all_labels[self.sampled_indices].sum(axis=0)
+
+        print(f"  📊 Class-balanced sampling enabled:")
+        print(f"     Total samples: {total_samples}")
+        print(f"     Sampled: {num_samples} ({sample_ratio*100:.1f}%)")
+        print(f"     Alpha_balance: {self.alpha_balance}")
+        print(f"     Original per-class counts: {class_counts.astype(int).tolist()}")
+        print(f"     Sampled  per-class counts: {sampled_label_counts.astype(int).tolist()}")
+
+        self._save_sampled_cooccurrence()
+
+    def _save_sampled_cooccurrence(self):
+        if not self.save_dir:
+            return
+
+        # Resolve original label space (if base dataset is GroupedDataset, expand to original IDs).
+        if hasattr(self.base_dataset, 'group_labels'):
+            group_labels = list(self.base_dataset.group_labels)
+            label_space = max(group_labels) + 1
+        else:
+            _, first_label = self.base_dataset[0]
+            if isinstance(first_label, torch.Tensor):
+                label_space = int(first_label.numel())
+            else:
+                label_space = int(np.array(first_label).size)
+            group_labels = list(range(label_space))
+
+        co = np.zeros((label_space, label_space), dtype=np.int64)
+        for idx in self.sampled_indices:
+            _, label = self.base_dataset[idx]
+            if isinstance(label, torch.Tensor):
+                arr = label.cpu().numpy().flatten()
+            else:
+                arr = np.array(label).flatten()
+            active_local = [i for i, v in enumerate(arr) if v > 0 and i < len(group_labels)]
+            active_orig = [group_labels[i] for i in active_local]
+            for i in active_orig:
+                for j in active_orig:
+                    co[i, j] += 1
+
+        os.makedirs(self.save_dir, exist_ok=True)
+        cols = [f'Label_{i}' for i in range(label_space)]
+        df = pd.DataFrame(co, index=cols, columns=cols)
+        save_path = os.path.join(self.save_dir, 'sampled_cooccurrence.csv')
+        df.to_csv(save_path)
+        print(f"  ✅ Saved per-run sampled co-occurrence: {save_path}")
+
+    def __len__(self):
+        return len(self.sampled_indices)
+
+    def __getitem__(self, idx):
+        real_idx = self.sampled_indices[idx]
+        return self.base_dataset[real_idx]
+
+    def get_index_dic(self, list=True, get_labels=True):
         return get_class_index_dict(self)
 
 
@@ -890,17 +1134,27 @@ def build_dataset(args):
             print(f"\n{'='*60}")
             print(f"📊 Dataset Sampling Enabled")
             print(f"{'='*60}")
-            
-            # Get plot_distribution parameter from args
-            plot_dist = args.plot_distribution if hasattr(args, 'plot_distribution') else True
-            
-            train_dataset = SampledDataset(
-                train_dataset, 
-                args.sample, 
-                seed=42, 
-                dataset_name=args.dataset,
-                plot_distribution=plot_dist
-            )
+
+            if hasattr(args, 'class_balanced_sampling') and args.class_balanced_sampling:
+                train_dataset = ClassBalancedSampledDataset(
+                    train_dataset,
+                    args.sample,
+                    alpha_balance=args.class_balanced_alpha if hasattr(args, 'class_balanced_alpha') else 1.0,
+                    seed=42,
+                    dataset_name=args.dataset,
+                    save_dir=args.result_save_dir if hasattr(args, 'result_save_dir') else None
+                )
+            else:
+                # Get plot_distribution parameter from args
+                plot_dist = args.plot_distribution if hasattr(args, 'plot_distribution') else True
+
+                train_dataset = SampledDataset(
+                    train_dataset,
+                    args.sample,
+                    seed=42,
+                    dataset_name=args.dataset,
+                    plot_distribution=plot_dist
+                )
             # Note: We don't sample test dataset to keep full evaluation
             print(f"  Note: Test dataset is NOT sampled (full evaluation)")
             print(f"{'='*60}\n")

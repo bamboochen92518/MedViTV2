@@ -27,6 +27,7 @@ from .cb_loss import CBLoss, CBLossOriginal
 from .asl_loss import ASLoss, ASLSingleLabel
 from .focal_loss import FocalLoss
 from .dbfocal_loss import DBFocalLoss, ResampleLoss
+from .ldace_ccl_loss import LDACELoss, CCLLoss, LDACECCLLoss
 
 
 __all__ = [
@@ -38,6 +39,9 @@ __all__ = [
     'FocalLoss',
     'DBFocalLoss',
     'ResampleLoss',
+    'LDACELoss',
+    'CCLLoss',
+    'LDACECCLLoss',
     'get_loss_function'
 ]
 
@@ -102,7 +106,16 @@ def get_loss_function(loss_name, num_classes, dataset=None, task='multi-label, b
             raise ValueError("DBFocalLoss requires dataset to calculate class frequencies. "
                            "Please pass dataset parameter.")
         return DBFocalLoss(dataset=dataset, num_classes=num_classes, **kwargs)
+
+    elif loss_name in ['LDACE_CCL', 'LDACE+CCL', 'LDACECCL']:
+        return LDACECCLLoss(num_classes=num_classes, **kwargs)
+
+    elif loss_name == 'LDACE':
+        return LDACELoss(num_classes=num_classes, **kwargs)
+
+    elif loss_name == 'CCL':
+        return CCLLoss(**kwargs)
     
     else:
         raise ValueError(f"Unknown loss function: {loss_name}. "
-                        f"Available options: 'default', 'BCE', 'CBLoss', 'CBLossOriginal', 'ASL', 'Focal', 'DBFocal'")
+                f"Available options: 'default', 'BCE', 'CBLoss', 'CBLossOriginal', 'ASL', 'Focal', 'DBFocal', 'LDACE_CCL', 'LDACE', 'CCL'")

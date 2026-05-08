@@ -3,9 +3,9 @@ Long-Tail Dataset Splitter
 Split dataset classes into head, middle, and tail groups based on sample counts
 
 This module provides utilities to analyze and split long-tail datasets into three tiers:
-- Head: Classes with >= 7500 samples (high frequency)
-- Middle: Classes with 2500 < samples < 7500
-- Tail: Classes with <= 2500 samples (low frequency)
+- Head: Classes with >= HEAD_THRESHOLD samples (high frequency)
+- Middle: Classes with TAIL_THRESHOLD < samples < HEAD_THRESHOLD
+- Tail: Classes with <= TAIL_THRESHOLD samples (low frequency)
 """
 
 import numpy as np
@@ -15,14 +15,17 @@ from typing import Dict, List, Optional
 import os
 from collections import Counter
 
+HEAD_THRESHOLD = 7500
+TAIL_THRESHOLD = 2000
+
 
 class LongTailSplitter:
     """
     Split dataset classes into head, middle, and tail groups based on frequency
     
     Fixed thresholds:
-    - Head: >= 7500 samples
-    - Tail: <= 2500 samples
+    - Head: >= HEAD_THRESHOLD samples
+    - Tail: <= TAIL_THRESHOLD samples
     - Middle: Everything in between
     """
     
@@ -106,7 +109,8 @@ class LongTailSplitter:
     
     def split(self) -> Dict[str, List[int]]:
         """
-        Split into head (>=7500), middle (2500-7500), tail (<=2500)
+        Split into head (>= HEAD_THRESHOLD), middle (> TAIL_THRESHOLD and < HEAD_THRESHOLD),
+        and tail (<= TAIL_THRESHOLD)
         
         Returns:
             Dictionary with 'head', 'middle', 'tail' keys containing class lists
@@ -116,9 +120,9 @@ class LongTailSplitter:
         tail = []
         
         for class_id, count in self.sorted_classes:
-            if count >= 7500:
+            if count >= HEAD_THRESHOLD:
                 head.append(class_id)
-            elif count <= 2500:
+            elif count <= TAIL_THRESHOLD:
                 tail.append(class_id)
             else:
                 middle.append(class_id)
@@ -135,7 +139,7 @@ class LongTailSplitter:
     def _print_split_summary(self, split_result: Dict[str, List[int]]):
         """Print summary of the split"""
         print(f"\n{'='*60}")
-        print(f"Split Result: head>=7500, tail<=2500")
+        print(f"Split Result: head>={HEAD_THRESHOLD}, tail<={TAIL_THRESHOLD}")
         print(f"{'='*60}")
         
         for tier in ['head', 'middle', 'tail']:
@@ -154,17 +158,28 @@ class LongTailSplitter:
             print(f"    Mean: {np.mean(counts):.1f}, Median: {np.median(counts):.1f}")
         
         print(f"{'='*60}\n")
+
+    def _build_two_tier_split(self, split_result: Dict[str, List[int]]) -> Dict[str, List[int]]:
+        """Merge middle and tail groups into a single tail group."""
+        return {
+            'head': split_result['head'],
+            'middle': [],
+            'tail': split_result['middle'] + split_result['tail']
+        }
     
     def visualize_split(self, 
                        split_result: Dict[str, List[int]],
-                       save_path: Optional[str] = None):
+                       save_path: Optional[str] = None,
+                       use_middle: bool = True):
         """
         Visualize the split with a bar chart
         
         Args:
             split_result: Result from the split method
             save_path: Path to save the figure (if None, generates default path)
+            use_middle: Whether to keep middle as a separate tier in the figure
         """
+        plot_split = split_result if use_middle else self._build_two_tier_split(split_result)
         fig, ax = plt.subplots(figsize=(14, 6))
         
         # Prepare data
@@ -179,7 +194,7 @@ class LongTailSplitter:
         }
         
         for tier in ['head', 'middle', 'tail']:
-            classes = split_result[tier]
+            classes = plot_split[tier]
             for class_id in classes:
                 all_classes.append(class_id)
                 all_counts.append(self.class_counts[class_id])
@@ -192,8 +207,15 @@ class LongTailSplitter:
         # Customize plot
         ax.set_xlabel('Class ID', fontsize=12, fontweight='bold')
         ax.set_ylabel('Number of Samples', fontsize=12, fontweight='bold')
-        ax.set_title(f'Long-Tail Distribution: {self.dataset_name}\n(Head≥7500, Tail≤2500)', 
-                    fontsize=14, fontweight='bold')
+        title_suffix = (
+            f'(Head≥{HEAD_THRESHOLD}, Middle {TAIL_THRESHOLD}-{HEAD_THRESHOLD}, Tail≤{TAIL_THRESHOLD})'
+            if use_middle else f'(Head≥{HEAD_THRESHOLD}, Tail<{HEAD_THRESHOLD}; middle merged into tail)'
+        )
+        ax.set_title(
+            f'Long-Tail Distribution: {self.dataset_name}\n{title_suffix}',
+            fontsize=14,
+            fontweight='bold'
+        )
         ax.set_xticks(x)
         ax.set_xticklabels(all_classes, rotation=45, ha='right')
         ax.grid(axis='y', alpha=0.3, linestyle='--')
@@ -201,10 +223,21 @@ class LongTailSplitter:
         # Add legend
         from matplotlib.patches import Patch
         legend_elements = [
-            Patch(facecolor=color_map['head'], label=f"Head (≥7500): {len(split_result['head'])} classes"),
-            Patch(facecolor=color_map['middle'], label=f"Middle (2500-7500): {len(split_result['middle'])} classes"),
-            Patch(facecolor=color_map['tail'], label=f"Tail (≤2500): {len(split_result['tail'])} classes")
+            Patch(facecolor=color_map['head'], label=f"Head (≥{HEAD_THRESHOLD}): {len(plot_split['head'])} classes"),
+            Patch(
+                facecolor=color_map['middle'],
+                label=f"Middle ({TAIL_THRESHOLD}-{HEAD_THRESHOLD}): {len(plot_split['middle'])} classes"
+            ),
+            Patch(
+                facecolor=color_map['tail'],
+                label=(
+                    f"Tail (≤{TAIL_THRESHOLD}): {len(plot_split['tail'])} classes"
+                    if use_middle else f"Tail (<{HEAD_THRESHOLD}): {len(plot_split['tail'])} classes"
+                )
+            )
         ]
+        if not use_middle:
+            legend_elements = [legend_elements[0], legend_elements[2]]
         ax.legend(handles=legend_elements, loc='upper right', fontsize=10)
         
         plt.tight_layout()
@@ -212,7 +245,8 @@ class LongTailSplitter:
         # Save figure
         if save_path is None:
             os.makedirs('./results/longtail_splits', exist_ok=True)
-            save_path = f'./results/longtail_splits/{self.dataset_name}_longtail_split.png'
+            suffix = 'head_mid_tail' if use_middle else 'head_tail'
+            save_path = f'./results/longtail_splits/{self.dataset_name}_longtail_split_{suffix}.png'
         
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         print(f"✅ Visualization saved to: {save_path}")
@@ -243,7 +277,7 @@ class LongTailSplitter:
         with open(output_path, 'w') as f:
             f.write(f"Long-Tail Split for {self.dataset_name}\n")
             f.write(f"{'='*60}\n")
-            f.write(f"Thresholds: Head >= 7500, Tail <= 2500\n")
+            f.write(f"Thresholds: Head >= {HEAD_THRESHOLD}, Tail <= {TAIL_THRESHOLD}\n")
             f.write(f"{'='*60}\n\n")
             
             for tier in ['head', 'middle', 'tail']:
@@ -268,7 +302,7 @@ def analyze_medmnist_longtail(dataset_name: str = 'chestmnist'):
     """
     Analyze and split a MedMNIST dataset into head/middle/tail
     
-    Fixed thresholds: Head >= 7500, Tail <= 2500
+    Fixed thresholds: Head >= HEAD_THRESHOLD, Tail <= TAIL_THRESHOLD
     
     Args:
         dataset_name: Name of the MedMNIST dataset (e.g., 'chestmnist')
@@ -291,8 +325,9 @@ def analyze_medmnist_longtail(dataset_name: str = 'chestmnist'):
     # Perform split
     result = splitter.split()
     
-    # Visualize and export
-    splitter.visualize_split(result)
+    # Visualize both grouping modes and export a single text report
+    splitter.visualize_split(result, use_middle=True)
+    splitter.visualize_split(result, use_middle=False)
     splitter.export_split(result)
     
     return result, splitter
@@ -304,7 +339,7 @@ if __name__ == '__main__':
     """
     print("\n" + "="*60)
     print("Long-Tail Dataset Splitter")
-    print("Thresholds: Head >= 7500, Tail <= 2500")
+    print(f"Thresholds: Head >= {HEAD_THRESHOLD}, Tail <= {TAIL_THRESHOLD}")
     print("="*60 + "\n")
     
     result, splitter = analyze_medmnist_longtail('chestmnist')
